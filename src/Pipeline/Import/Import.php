@@ -149,6 +149,66 @@ class Import
     }
 
     /**
+     * Delete information.
+     *
+     * @param ProcessedItem[] $delete Information items to delete
+     * @param ImportInfo      $info   Pipeline metainfo
+     * @param bool            $dryRun Whether to perform a dry-run (don't modify data) or not
+     *
+     * @return int Number of data items deleted
+     */
+    public function deleteData(array &$delete, ImportInfo $info, bool $dryRun = FALSE): int
+    {
+        $this->target->setTarget($info->getTargetIdentifier());
+
+        $this->reportStep('Configure content range', $info);
+        $range = $this->configureContentRange($delete, $info);
+
+        $this->reportStep('Removing non unique items', $info);
+        $this->removeNonUniqueItems($delete);
+
+        $this->reportStep('Create data diff', $info);
+
+        // We need to go through the Diff here, since the hooks operate
+        // on what getObsoleteData() returns, which would be empty otherwise.
+        $this->diff->diff($delete, []);
+
+        $data = [
+            'new'      => [],
+            'updated'  => [],
+            'obsolete' => $this->diff->getObsoleteData(),
+        ];
+
+        $obsoleteCount = count($data['obsolete']);
+
+        $info->setResults(0, $obsoleteCount, 0, 0, 0);
+
+        if ($dryRun === TRUE)
+        {
+            return 0;
+        }
+
+        try
+        {
+            $this->reportStep('Delete data in database', $info);
+            $importResult = $this->target->updateData($data, $range);
+        }
+        catch (DatabaseException $e)
+        {
+            $e->setMessage('Failed updating data in the database!');
+
+            throw $e;
+        }
+
+        if ($importResult === 0 && $obsoleteCount !== 0)
+        {
+            $this->logger->warning('Import reported changes but DB reported nothing changed!');
+        }
+
+        return $importResult;
+    }
+
+    /**
      * Create elements depicting the wanted range of the selection
      *
      * @param ProcessedItem[] $items List of items in the update
